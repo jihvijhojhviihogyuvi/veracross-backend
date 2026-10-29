@@ -93,6 +93,11 @@ app.get('/stream', async (req, res) => {
 });
 
 // Serve the client page
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', browser: !!browser, url: currentUrl });
+});
+
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html><head><title>Veracross Remote Browser</title>
