@@ -18,13 +18,18 @@ let sessionCookie = null;
 let screencastActive = false;
 
 const VERACROSS_LOGIN = 'https://portals.veracross.com/maimonides/student';
+
 async function initBrowser() {
   if (browser) return;
   try {
-    browser = await puppeteer.launch({
+    const launchOpts = {
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
+    };
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+    browser = await puppeteer.launch(launchOpts);
     page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
     await page.goto(VERACROSS_LOGIN, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -73,6 +78,7 @@ async function checkLogin() {
     }
   }
 }
+
 // WebSocket handling
 wss.on('connection', (ws) => {
   ws.on('message', async (data) => {
@@ -96,6 +102,7 @@ wss.on('connection', (ws) => {
     }
   });
 });
+
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html><head><title>Veracross Remote Browser</title>
