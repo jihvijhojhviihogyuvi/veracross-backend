@@ -18,14 +18,44 @@ const VERACROSS_LOGIN = 'https://portals.veracross.com/maimonides/student';
 async function initBrowser() {
   if (browser) return;
   try {
-    const launchOpts = {
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    };
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-      launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    const chromePaths = [
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable'
+    ].filter(Boolean);
+
+    let launched = false;
+    for (const chromePath of chromePaths) {
+      try {
+        const fs = require('fs');
+        if (!fs.existsSync(chromePath)) continue;
+        browser = await puppeteer.launch({
+          executablePath: chromePath,
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+        launched = true;
+        console.log('Launched Chrome from:', chromePath);
+        break;
+      } catch (e) {
+        console.log('Failed to launch from', chromePath, ':', e.message);
+      }
     }
-    browser = await puppeteer.launch(launchOpts);
+    if (!launched) {
+      try {
+        browser = await puppeteer.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+        launched = true;
+        console.log('Launched bundled Chrome');
+      } catch (e) {
+        console.error('All Chrome launch attempts failed:', e.message);
+        throw e;
+      }
+    }
     page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
     await page.goto(VERACROSS_LOGIN, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -67,38 +97,10 @@ async function checkLogin() {
     }
   }
 }
+
 // SSE endpoint for real-time streaming
-app.get('/stream', async (req, res) => {
-  if (!browser) await initBrowser();
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*'
-  });
-  // Send frames as they arrive
-  const interval = setInterval(async () => {
-    if (latestFrame) {
-      res.write('data: ' + JSON.stringify({ type: 'frame', data: latestFrame }) + '\n\n');
-    }
-    await checkLogin();
-    res.write('data: ' + JSON.stringify({ type: 'status', url: currentUrl, loginComplete }) + '\n\n');
-    if (loginComplete) {
-      res.write('data: ' + JSON.stringify({ type: 'loginComplete', cookie: sessionCookie }) + '\n\n');
-      clearInterval(interval);
-      res.end();
-    }
-  }, 200);
-  req.on('close', () => clearInterval(interval));
-});
-
-// Serve the client page
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', browser: !!browser, url: currentUrl });
-});
-
 app.get('/', (req, res) => {
+  if (!browser) initBrowser();
   res.send(`<!DOCTYPE html>
 <html><head><title>Veracross Remote Browser</title>
 <style>
@@ -161,12 +163,35 @@ app.get('/', (req, res) => {
 </script>
 </body></html>`);
 });
+
+app.get('/stream', async (req, res) => {
+  if (!browser) await initBrowser();
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  const interval = setInterval(async () => {
+    if (latestFrame) {
+      res.write('data: ' + JSON.stringify({ type: 'frame', data: latestFrame }) + '\n\n');
+    }
+    await checkLogin();
+    res.write('data: ' + JSON.stringify({ type: 'status', url: currentUrl, loginComplete }) + '\n\n');
+    if (loginComplete) {
+      res.write('data: ' + JSON.stringify({ type: 'loginComplete', cookie: sessionCookie }) + '\n\n');
+      clearInterval(interval);
+      res.end();
+    }
+  }, 200);
+  req.on('close', () => clearInterval(interval));
+});
 app.post('/click', async (req, res) => {
   const { x, y } = req.body;
   if (page && x !== undefined && y !== undefined) {
     try {
       await page.mouse.click(x, y);
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 500));
       await checkLogin();
     } catch (err) { console.error('Click error:', err); }
   }
@@ -178,7 +203,7 @@ app.post('/type', async (req, res) => {
   if (page && text) {
     try {
       await page.keyboard.type(text);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 300));
       await checkLogin();
     } catch (err) { console.error('Type error:', err); }
   }
@@ -189,7 +214,7 @@ app.post('/back', async (req, res) => {
   if (page) {
     try {
       await page.goBack();
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1000));
       await checkLogin();
     } catch (err) { console.error('Back error:', err); }
   }
@@ -202,6 +227,10 @@ app.get('/done', (req, res) => {
   }
   const deepLink = 'veracross://auth?cookie=' + encodeURIComponent(sessionCookie);
   res.send('<!DOCTYPE html><html><head><title>Redirecting...</title></head><body><p>Login successful!</p><script>window.location.href = "' + deepLink + '";</script><p><a href="' + deepLink + '">Tap here</a></p></body></html>');
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', browser: !!browser, url: currentUrl });
 });
 
 const PORT = process.env.PORT || 3000;
