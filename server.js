@@ -1,20 +1,16 @@
 ﻿const express = require('express');
 const puppeteer = require('puppeteer');
-const { WebSocketServer } = require('ws');
-const http = require('http');
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
 let browser = null;
 let page = null;
 let currentUrl = '';
 let loginComplete = false;
 let sessionCookie = null;
+let latestFrame = null;
 let screencastActive = false;
 
 const VERACROSS_LOGIN = 'https://portals.veracross.com/maimonides/student';
@@ -44,10 +40,7 @@ function startScreencast() {
   if (screencastActive || !page) return;
   screencastActive = true;
   page.on('screencastFrame', (frame) => {
-    const msg = JSON.stringify({ type: 'frame', data: frame.data, sessionId: frame.sessionId });
-    wss.clients.forEach(client => {
-      if (client.readyState === 1) client.send(msg);
-    });
+    latestFrame = frame.data;
     page.screencastFrameAck({ sessionId: frame.sessionId }).catch(() => {});
   });
   page.startScreencast({
@@ -71,38 +64,35 @@ async function checkLogin() {
     if (allCookies && !loginComplete) {
       loginComplete = true;
       sessionCookie = allCookies;
-      const msg = JSON.stringify({ type: 'loginComplete', cookie: sessionCookie });
-      wss.clients.forEach(client => {
-        if (client.readyState === 1) client.send(msg);
-      });
     }
   }
 }
-
-// WebSocket handling
-wss.on('connection', (ws) => {
-  ws.on('message', async (data) => {
-    try {
-      const msg = JSON.parse(data);
-      if (!page) return;
-      if (msg.type === 'click') {
-        await page.mouse.click(msg.x, msg.y);
-      } else if (msg.type === 'type') {
-        await page.keyboard.type(msg.text);
-      } else if (msg.type === 'key') {
-        await page.keyboard.press(msg.key);
-      } else if (msg.type === 'back') {
-        await page.goBack();
-      } else if (msg.type === 'status') {
-        await checkLogin();
-        ws.send(JSON.stringify({ type: 'status', url: currentUrl, loginComplete }));
-      }
-    } catch (err) {
-      console.error('WS message error:', err);
-    }
+// SSE endpoint for real-time streaming
+app.get('/stream', async (req, res) => {
+  if (!browser) await initBrowser();
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
   });
+  // Send frames as they arrive
+  const interval = setInterval(async () => {
+    if (latestFrame) {
+      res.write('data: ' + JSON.stringify({ type: 'frame', data: latestFrame }) + '\n\n');
+    }
+    await checkLogin();
+    res.write('data: ' + JSON.stringify({ type: 'status', url: currentUrl, loginComplete }) + '\n\n');
+    if (loginComplete) {
+      res.write('data: ' + JSON.stringify({ type: 'loginComplete', cookie: sessionCookie }) + '\n\n');
+      clearInterval(interval);
+      res.end();
+    }
+  }, 200);
+  req.on('close', () => clearInterval(interval));
 });
 
+// Serve the client page
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html><head><title>Veracross Remote Browser</title>
@@ -119,7 +109,7 @@ app.get('/', (req, res) => {
 <div id="container">
   <h2>Veracross Remote Browser (Real-time)</h2>
   <p>Click on the image to interact. Type in the text field and press Enter.</p>
-  <canvas id="screen" width="1280" height="900" onclick="handleClick(event)"></canvas>
+  <img id="screen" src="/screenshot" alt="Browser view" onclick="handleClick(event)">
   <div id="controls">
     <input type="text" id="textInput" placeholder="Type here and press Enter" onkeypress="handleKey(event)">
     <button onclick="goBack()">Back</button>
@@ -127,60 +117,52 @@ app.get('/', (req, res) => {
   <div id="status">Connecting...</div>
 </div>
 <script>
-  const canvas = document.getElementById('screen');
-  const ctx = canvas.getContext('2d');
+  const img = document.getElementById('screen');
   const status = document.getElementById('status');
-  let ws = null;
-
-  function connect() {
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'; ws = new WebSocket(wsProto + '//' + window.location.host);
-    ws.onopen = () => { status.textContent = 'Connected. Loading browser...'; };
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'frame') {
-        const img = new Image();
-        img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
-        img.src = 'data:image/jpeg;base64,' + msg.data;
-      } else if (msg.type === 'status') {
-        status.textContent = 'URL: ' + msg.url;
-        if (msg.loginComplete) { window.location.href = '/done'; }
-      }
-    };
-    ws.onclose = () => { status.textContent = 'Disconnected. Reconnecting...'; setTimeout(connect, 2000); };
-  }
+  const evtSource = new EventSource('/stream');
+  evtSource.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'frame') {
+      img.src = 'data:image/jpeg;base64,' + msg.data;
+    } else if (msg.type === 'status') {
+      status.textContent = 'URL: ' + msg.url;
+    } else if (msg.type === 'loginComplete') {
+      evtSource.close();
+      window.location.href = 'veracross://auth?cookie=' + encodeURIComponent(msg.cookie);
+    }
+  };
+  evtSource.onerror = () => { status.textContent = 'Connection lost. Reconnecting...'; };
 
   function handleClick(e) {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    const rect = img.getBoundingClientRect();
+    const scaleX = img.naturalWidth / rect.width;
+    const scaleY = img.naturalHeight / rect.height;
     const x = Math.round((e.clientX - rect.left) * scaleX);
     const y = Math.round((e.clientY - rect.top) * scaleY);
-    ws.send(JSON.stringify({ type: 'click', x, y }));
+    fetch('/click', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({x, y}) });
   }
 
   function handleKey(e) {
     if (e.key === 'Enter') {
       const text = document.getElementById('textInput').value;
       document.getElementById('textInput').value = '';
-      ws.send(JSON.stringify({ type: 'type', text }));
+      fetch('/type', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) });
     }
   }
 
   function goBack() {
-    ws.send(JSON.stringify({ type: 'back' }));
+    fetch('/back', { method: 'POST' });
   }
-
-  setInterval(() => {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'status' }));
-  }, 2000);
-
-  connect();
 </script>
 </body></html>`);
 });
-app.get('/status', async (req, res) => {
-  if (!browser) await initBrowser();
-  res.json({ url: currentUrl, loginComplete });
+app.get('/screenshot', async (req, res) => {
+  if (!screenshot) await updateScreenshot();
+  if (!screenshot) return res.status(500).send('No screenshot');
+  const buf = Buffer.from(screenshot, 'base64');
+  res.set('Content-Type', 'image/jpeg');
+  res.set('Cache-Control', 'no-cache');
+  res.send(buf);
 });
 
 app.post('/click', async (req, res) => {
