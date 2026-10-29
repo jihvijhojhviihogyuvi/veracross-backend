@@ -12,6 +12,7 @@ let loginComplete = false;
 let sessionCookie = null;
 let latestFrame = null;
 let screencastActive = false;
+let browserError = null;
 
 const VERACROSS_LOGIN = 'https://portals.veracross.com/maimonides/student';
 
@@ -63,6 +64,7 @@ async function initBrowser() {
     startScreencast();
   } catch (err) {
     console.error('Browser init error:', err);
+    browserError = err.message;
   }
 }
 
@@ -230,7 +232,7 @@ app.get('/done', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', browser: !!browser, url: currentUrl });
+  res.json({ status: 'ok', browser: !!browser, url: currentUrl, error: browserError });
 });
 
 const PORT = process.env.PORT || 3000;
