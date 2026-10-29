@@ -114,7 +114,7 @@ app.get('/', (req, res) => {
 <div id="container">
   <h2>Veracross Remote Browser (Real-time)</h2>
   <p>Click on the image to interact. Type in the text field and press Enter.</p>
-  <img id="screen" src="/screenshot" alt="Browser view" onclick="handleClick(event)">
+  <img id="screen" alt="Browser view" onclick="handleClick(event)">
   <div id="controls">
     <input type="text" id="textInput" placeholder="Type here and press Enter" onkeypress="handleKey(event)">
     <button onclick="goBack()">Back</button>
@@ -161,15 +161,6 @@ app.get('/', (req, res) => {
 </script>
 </body></html>`);
 });
-app.get('/screenshot', async (req, res) => {
-  if (!screenshot) await updateScreenshot();
-  if (!screenshot) return res.status(500).send('No screenshot');
-  const buf = Buffer.from(screenshot, 'base64');
-  res.set('Content-Type', 'image/jpeg');
-  res.set('Cache-Control', 'no-cache');
-  res.send(buf);
-});
-
 app.post('/click', async (req, res) => {
   const { x, y } = req.body;
   if (page && x !== undefined && y !== undefined) {
