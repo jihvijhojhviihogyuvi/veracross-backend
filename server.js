@@ -133,7 +133,7 @@ app.get('/', (req, res) => {
   let ws = null;
 
   function connect() {
-    ws = new WebSocket('ws://' + window.location.host);
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'; ws = new WebSocket(wsProto + '//' + window.location.host);
     ws.onopen = () => { status.textContent = 'Connected. Loading browser...'; };
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
