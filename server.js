@@ -88,7 +88,7 @@ function startScreenshotPolling() {
     } catch (err) {
       console.error('Screenshot error:', err.message);
     }
-  }, 300);
+  }, 100);
 }
 
 async function checkLogin() {
@@ -106,7 +106,7 @@ async function checkLogin() {
     }
   }
 }
-// Serve the client page
+
 app.get('/', async (req, res) => {
   if (!browser) await initBrowser();
   res.send(`<!DOCTYPE html>
@@ -114,22 +114,20 @@ app.get('/', async (req, res) => {
 <style>
   body { margin: 0; font-family: sans-serif; background: #1a1a1a; color: #fff; }
   #container { max-width: 900px; margin: 0 auto; padding: 10px; }
-  #screen { width: 100%; border: 2px solid #333; cursor: crosshair; background: #000; min-height: 400px; }
+  #screen { width: 100%; border: 2px solid #333; cursor: crosshair; background: #000; }
   #controls { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   #textInput { flex: 1; min-width: 200px; padding: 10px; font-size: 16px; }
   button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
   #status { margin-top: 10px; padding: 10px; background: #2a2a2a; border-radius: 4px; font-size: 14px; }
-  #loading { text-align: center; padding: 50px; font-size: 18px; }
 </style>
 </head><body>
 <div id="container">
-  <h2>Veracross Remote Browser</h2>
+  <h2>Veracross Remote Browser (Real-time 10fps)</h2>
   <p>Click on the image to interact. Type in the text field and press Enter.</p>
   <img id="screen" alt="Browser view" onclick="handleClick(event)">
   <div id="controls">
     <input type="text" id="textInput" placeholder="Type here and press Enter" onkeypress="handleKey(event)">
     <button onclick="goBack()">Back</button>
-    <button onclick="checkStatus()">Check Status</button>
   </div>
   <div id="status">Loading...</div>
 </div>
@@ -155,15 +153,6 @@ app.get('/', async (req, res) => {
     }
   }
 
-  async function checkStatus() {
-    const res = await fetch('/status');
-    const data = await res.json();
-    status.textContent = 'URL: ' + data.url + ' | browser: ' + data.browser + ' | loginComplete: ' + data.loginComplete;
-    if (data.loginComplete) {
-      window.location.href = 'veracross://auth?cookie=' + encodeURIComponent(data.cookie);
-    }
-  }
-
   function handleClick(e) {
     const rect = img.getBoundingClientRect();
     const scaleX = img.naturalWidth / rect.width;
@@ -171,7 +160,7 @@ app.get('/', async (req, res) => {
     const x = Math.round((e.clientX - rect.left) * scaleX);
     const y = Math.round((e.clientY - rect.top) * scaleY);
     fetch('/click', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({x, y}) });
-    setTimeout(refresh, 1500);
+    setTimeout(refresh, 500);
   }
 
   function handleKey(e) {
@@ -179,17 +168,16 @@ app.get('/', async (req, res) => {
       const text = document.getElementById('textInput').value;
       document.getElementById('textInput').value = '';
       fetch('/type', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) });
-      setTimeout(refresh, 1000);
+      setTimeout(refresh, 500);
     }
   }
 
   function goBack() {
     fetch('/back', { method: 'POST' });
-    setTimeout(refresh, 1500);
+    setTimeout(refresh, 1000);
   }
 
-  // Auto-refresh every 500ms
-  setInterval(refresh, 500);
+  setInterval(refresh, 100);
   refresh();
 </script>
 </body></html>`);
@@ -216,7 +204,7 @@ app.post('/click', async (req, res) => {
   if (page && x !== undefined && y !== undefined) {
     try {
       await page.mouse.click(x, y);
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 500));
       await checkLogin();
     } catch (err) { console.error('Click error:', err.message); }
   }
@@ -228,7 +216,7 @@ app.post('/type', async (req, res) => {
   if (page && text) {
     try {
       await page.keyboard.type(text);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 300));
       await checkLogin();
     } catch (err) { console.error('Type error:', err.message); }
   }
@@ -239,7 +227,7 @@ app.post('/back', async (req, res) => {
   if (page) {
     try {
       await page.goBack();
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1000));
       await checkLogin();
     } catch (err) { console.error('Back error:', err.message); }
   }
