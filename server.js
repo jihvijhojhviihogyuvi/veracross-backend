@@ -161,6 +161,10 @@ app.get('/', async (req, res) => {
   <div id="controls">
     <input type="text" id="textInput" placeholder="Type here and press Enter" onkeypress="handleKey(event)">
     <button onclick="goBack()">Back</button>
+    <button onclick="loadGoogle()">Load Google Sign-In</button>
+    <input type="text" id="urlInput" placeholder="Enter URL" style="flex:1;min-width:200px;padding:8px;">
+    <button onclick="navigate()">Go</button>
+
     <button onclick="clickGoogle()">Click Google Sign-In</button>
     <button onclick="scrollDown()">Scroll Down</button>
     <button onclick="scrollUp()">Scroll Up</button>
@@ -212,6 +216,25 @@ app.get('/', async (req, res) => {
     fetch('/back', { method: 'POST' });
   }
 
+  async function loadGoogle() {
+    status.textContent = 'Navigating to Google Sign-In...';
+    const res = await fetch('/navigate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url: 'https://accounts.google.com/signin'}) });
+    const data = await res.json();
+    status.textContent = data.ok ? 'Loaded: ' + data.url : 'Error: ' + (data.error || 'unknown');
+    setTimeout(refresh, 2000);
+  }
+
+  async function navigate() {
+    const url = document.getElementById('urlInput').value;
+    if (!url) return;
+    status.textContent = 'Navigating to ' + url + '...';
+    const res = await fetch('/navigate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url}) });
+    const data = await res.json();
+    status.textContent = data.ok ? 'Loaded: ' + data.url : 'Error: ' + (data.error || 'unknown');
+    setTimeout(refresh, 2000);
+  }
+
+
   async function clickGoogle() {
     status.textContent = 'Clicking Google Sign-In...';
     const res = await fetch('/clickGoogle', { method: 'POST' });
@@ -254,6 +277,23 @@ app.get('/screenshot', async (req, res) => {
   res.set('Cache-Control', 'no-cache');
   res.send(buf);
 });
+app.post('/navigate', async (req, res) => {
+  const { url } = req.body;
+  if (page && url) {
+    try {
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      await checkLogin();
+      res.json({ ok: true, url: page.url() });
+    } catch (err) {
+      console.error('Navigate error:', err.message);
+      res.json({ ok: false, error: err.message });
+    }
+  } else {
+    res.json({ ok: false, error: 'no page or url' });
+  }
+});
+
+
 
 app.get('/status', async (req, res) => {
   if (!browser) await initBrowser();
