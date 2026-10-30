@@ -13,6 +13,7 @@ let sessionCookie = null;
 let latestFrame = null;
 let screencastActive = false;
 let browserError = null;
+let initPromise = null;
 let sessionId = 0;
 
 const VERACROSS_LOGIN = 'https://portals.veracross.com/maimonides/student';
@@ -33,6 +34,8 @@ async function resetBrowser() {
 
 async function initBrowser() {
   if (browser) return;
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
   try {
     const chromePaths = [
       process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -81,7 +84,11 @@ async function initBrowser() {
   } catch (err) {
     console.error('Browser init error:', err);
     browserError = err.message;
+  } finally {
+    initPromise = null;
   }
+  })();
+  return initPromise;
 }
 
 function startScreenshotPolling() {
@@ -154,6 +161,10 @@ app.get('/', async (req, res) => {
   <div id="controls">
     <input type="text" id="textInput" placeholder="Type here and press Enter" onkeypress="handleKey(event)">
     <button onclick="goBack()">Back</button>
+    <button onclick="clickGoogle()">Click Google Sign-In</button>
+    <button onclick="scrollDown()">Scroll Down</button>
+    <button onclick="scrollUp()">Scroll Up</button>
+
     <button id="resetBtn" onclick="resetBrowser()">Reset (new session)</button>
   </div>
   <div id="status">Loading...</div>
@@ -200,6 +211,25 @@ app.get('/', async (req, res) => {
   function goBack() {
     fetch('/back', { method: 'POST' });
   }
+
+  async function clickGoogle() {
+    status.textContent = 'Clicking Google Sign-In...';
+    const res = await fetch('/clickGoogle', { method: 'POST' });
+    const data = await res.json();
+    status.textContent = data.ok ? 'Clicked Google Sign-In. Waiting...' : 'Could not find Google button: ' + (data.error || '');
+    setTimeout(refresh, 3000);
+  }
+
+  async function scrollDown() {
+    await fetch('/scrollDown', { method: 'POST' });
+    setTimeout(refresh, 500);
+  }
+
+  async function scrollUp() {
+    await fetch('/scrollUp', { method: 'POST' });
+    setTimeout(refresh, 500);
+  }
+
 
   async function resetBrowser() {
     status.textContent = 'Resetting browser...';
@@ -253,6 +283,48 @@ app.post('/type', async (req, res) => {
   }
   res.json({ ok: true });
 });
+
+app.post('/clickGoogle', async (req, res) => {
+  if (!page) { res.json({ ok: false, error: 'no page' }); return; }
+  try {
+    const clicked = await page.evaluate(() => {
+      const els = document.querySelectorAll('a, button, div[role="button"]');
+      for (const el of els) {
+        if (el.textContent && el.textContent.toLowerCase().includes('google')) {
+          el.click();
+          return true;
+        }
+        if (el.getAttribute('href') && el.getAttribute('href').includes('accounts.google.com')) {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    console.log('clickGoogle result:', clicked);
+    await new Promise(r => setTimeout(r, 3000));
+    await checkLogin();
+    res.json({ ok: clicked });
+  } catch (err) {
+    console.error('clickGoogle error:', err.message);
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/scrollDown', async (req, res) => {
+  if (page) {
+    try { await page.evaluate(() => window.scrollBy(0, 400)); await new Promise(r => setTimeout(r, 500)); } catch (e) {}
+  }
+  res.json({ ok: true });
+});
+
+app.post('/scrollUp', async (req, res) => {
+  if (page) {
+    try { await page.evaluate(() => window.scrollBy(0, -400)); await new Promise(r => setTimeout(r, 500)); } catch (e) {}
+  }
+  res.json({ ok: true });
+});
+
 
 app.post('/back', async (req, res) => {
   if (page) {
