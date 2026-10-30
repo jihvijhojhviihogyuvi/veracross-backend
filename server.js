@@ -13,8 +13,23 @@ let sessionCookie = null;
 let latestFrame = null;
 let screencastActive = false;
 let browserError = null;
+let sessionId = 0;
 
 const VERACROSS_LOGIN = 'https://portals.veracross.com/maimonides/student';
+
+async function resetBrowser() {
+  if (browser) {
+    try { await browser.close(); } catch (e) {}
+    browser = null;
+    page = null;
+    currentUrl = '';
+    loginComplete = false;
+    sessionCookie = null;
+    latestFrame = null;
+    screencastActive = false;
+  }
+  await initBrowser();
+}
 
 async function initBrowser() {
   if (browser) return;
@@ -35,7 +50,7 @@ async function initBrowser() {
         browser = await puppeteer.launch({
           executablePath: chromePath,
           headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
         });
         launched = true;
         console.log('Launched Chrome from:', chromePath);
@@ -48,7 +63,7 @@ async function initBrowser() {
       try {
         browser = await puppeteer.launch({
           headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
         });
         launched = true;
         console.log('Launched bundled Chrome');
@@ -83,10 +98,16 @@ function startScreenshotPolling() {
         await initBrowser();
         return;
       }
-      latestFrame = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 70 });
+      latestFrame = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 50 });
       await checkLogin();
     } catch (err) {
       console.error('Screenshot error:', err.message);
+      if (err.message && (err.message.includes('closed') || err.message.includes('detached'))) {
+        browser = null;
+        page = null;
+        screencastActive = false;
+        await initBrowser();
+      }
     }
   }, 100);
 }
@@ -94,7 +115,7 @@ function startScreenshotPolling() {
 async function checkLogin() {
   if (!page) return;
   currentUrl = page.url();
-  if (currentUrl.includes('/student') && !currentUrl.includes('login') && !currentUrl.includes('accounts.google')) {
+  if (currentUrl.includes('/student') && !currentUrl.includes('login') && !currentUrl.includes('accounts.google') && !currentUrl.includes('accounts.veracross')) {
     const cookies = await page.cookies();
     const allCookies = cookies
       .filter(c => c.domain.includes('veracross.com'))
@@ -108,6 +129,10 @@ async function checkLogin() {
 }
 
 app.get('/', async (req, res) => {
+  // Reset browser for new session (multi-user support)
+  if (req.query.reset === '1') {
+    await resetBrowser();
+  }
   if (!browser) await initBrowser();
   res.send(`<!DOCTYPE html>
 <html><head><title>Veracross Remote Browser</title>
@@ -119,15 +144,17 @@ app.get('/', async (req, res) => {
   #textInput { flex: 1; min-width: 200px; padding: 10px; font-size: 16px; }
   button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
   #status { margin-top: 10px; padding: 10px; background: #2a2a2a; border-radius: 4px; font-size: 14px; }
+  #resetBtn { background: #c00; color: #fff; }
 </style>
 </head><body>
 <div id="container">
-  <h2>Veracross Remote Browser (Real-time 10fps)</h2>
+  <h2>Veracross Remote Browser (10fps)</h2>
   <p>Click on the image to interact. Type in the text field and press Enter.</p>
   <img id="screen" alt="Browser view" onclick="handleClick(event)">
   <div id="controls">
     <input type="text" id="textInput" placeholder="Type here and press Enter" onkeypress="handleKey(event)">
     <button onclick="goBack()">Back</button>
+    <button id="resetBtn" onclick="resetBrowser()">Reset (new session)</button>
   </div>
   <div id="status">Loading...</div>
 </div>
@@ -160,7 +187,6 @@ app.get('/', async (req, res) => {
     const x = Math.round((e.clientX - rect.left) * scaleX);
     const y = Math.round((e.clientY - rect.top) * scaleY);
     fetch('/click', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({x, y}) });
-    setTimeout(refresh, 500);
   }
 
   function handleKey(e) {
@@ -168,13 +194,18 @@ app.get('/', async (req, res) => {
       const text = document.getElementById('textInput').value;
       document.getElementById('textInput').value = '';
       fetch('/type', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) });
-      setTimeout(refresh, 500);
     }
   }
 
   function goBack() {
     fetch('/back', { method: 'POST' });
-    setTimeout(refresh, 1000);
+  }
+
+  async function resetBrowser() {
+    status.textContent = 'Resetting browser...';
+    await fetch('/reset', { method: 'POST' });
+    img.src = '';
+    setTimeout(refresh, 2000);
   }
 
   setInterval(refresh, 100);
@@ -204,7 +235,7 @@ app.post('/click', async (req, res) => {
   if (page && x !== undefined && y !== undefined) {
     try {
       await page.mouse.click(x, y);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 300));
       await checkLogin();
     } catch (err) { console.error('Click error:', err.message); }
   }
@@ -216,7 +247,7 @@ app.post('/type', async (req, res) => {
   if (page && text) {
     try {
       await page.keyboard.type(text);
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 200));
       await checkLogin();
     } catch (err) { console.error('Type error:', err.message); }
   }
@@ -231,6 +262,11 @@ app.post('/back', async (req, res) => {
       await checkLogin();
     } catch (err) { console.error('Back error:', err.message); }
   }
+  res.json({ ok: true });
+});
+
+app.post('/reset', async (req, res) => {
+  await resetBrowser();
   res.json({ ok: true });
 });
 
